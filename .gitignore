@@ -33,5 +33,6 @@ BROWSE
 build_dir
 .flatpak-builder
 .cache
+.clangd/
 
 cmake-build-debug/

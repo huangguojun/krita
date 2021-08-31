@@ -54,9 +54,6 @@
 
 #include <KLocalizedTranslator>
 
-#ifdef Q_OS_ANDROID
-#include <QtAndroid>
-#endif
 
 #if defined Q_OS_WIN
 #include "config_use_qt_tablet_windows.h"
@@ -149,60 +146,7 @@ void resetRotation()
 } // namespace
 #endif
 
-#ifdef Q_OS_ANDROID
-extern "C" JNIEXPORT void JNICALL
-Java_org_krita_android_JNIWrappers_saveState(JNIEnv* /*env*/,
-                                             jobject /*obj*/,
-                                             jint    /*n*/)
-{
-    if (!KisPart::exists()) return;
-
-    KisPart *kisPart = KisPart::instance();
-    QList<QPointer<KisDocument>> list = kisPart->documents();
-    for (QPointer<KisDocument> &doc: list)
-    {
-        doc->autoSaveOnPause();
-    }
-
-    const QString configPath = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation);
-    QSettings kritarc(configPath + QStringLiteral("/kritadisplayrc"), QSettings::IniFormat);
-    kritarc.setValue("canvasState", "OPENGL_SUCCESS");
-}
-
-extern "C" JNIEXPORT jboolean JNICALL
-Java_org_krita_android_JNIWrappers_exitFullScreen(JNIEnv* /*env*/,
-                                                  jobject /*obj*/,
-                                                  jint    /*n*/)
-{
-    if (!KisPart::exists()) {
-        return false;
-    }
-
-    KisMainWindow *mainWindow = KisPart::instance()->currentMainwindow();
-    if (mainWindow) {
-        mainWindow->viewFullscreen(false);
-        return true;
-    } else {
-        return false;
-    }
-}
-
-extern "C" JNIEXPORT void JNICALL
-Java_org_krita_android_JNIWrappers_openFileFromIntent(JNIEnv* /*env*/,
-                                                      jobject /*obj*/,
-                                                      jstring str)
-{
-    QAndroidJniObject jUri(str);
-    if (jUri.isValid()) {
-        QString uri = jUri.toString();
-        QMetaObject::invokeMethod(KisApplication::instance(), "fileOpenRequested",
-                                  Qt::QueuedConnection, Q_ARG(QString, uri));
-    }
-}
-
-#define MAIN_EXPORT __attribute__ ((visibility ("default")))
-#define MAIN_FN main
-#elif defined Q_OS_WIN
+#ifdef  Q_OS_WIN
 #define MAIN_EXPORT __declspec(dllexport)
 #define MAIN_FN krita_main
 #else
@@ -216,9 +160,7 @@ extern "C" MAIN_EXPORT int MAIN_FN(int argc, char **argv)
     qsrand(time(0));
     bool runningInKDE = !qgetenv("KDE_FULL_SESSION").isEmpty();
 
-#if defined HAVE_X11
     qputenv("QT_QPA_PLATFORM", "xcb");
-#endif
 
     // Workaround a bug in QNetworkManager
     qputenv("QT_BEARER_POLL_TIMEOUT", QByteArray::number(-1));
@@ -234,38 +176,7 @@ extern "C" MAIN_EXPORT int MAIN_FN(int argc, char **argv)
 
     QCoreApplication::setAttribute(Qt::AA_DisableShaderDiskCache, true);
 
-#ifdef HAVE_HIGH_DPI_SCALE_FACTOR_ROUNDING_POLICY
-    // This rounding policy depends on a series of patches to Qt related to
-    // https://bugreports.qt.io/browse/QTBUG-53022. These patches are applied
-    // in ext_qt for WIndows (patches 0031-0036).
-    //
-    // The rounding policy can be set externally by setting the environment
-    // variable `QT_SCALE_FACTOR_ROUNDING_POLICY` to one of the following:
-    //   Round:            Round up for .5 and above.
-    //   Ceil:             Always round up.
-    //   Floor:            Always round down.
-    //   RoundPreferFloor: Round up for .75 and above.
-    //   PassThrough:      Don't round.
-    //
-    // The default is set to RoundPreferFloor for better behaviour than before,
-    // but can be overridden by the above environment variable.
-    QGuiApplication::setHighDpiScaleFactorRoundingPolicy(Qt::HighDpiScaleFactorRoundingPolicy::RoundPreferFloor);
-#endif
 
-#ifdef Q_OS_ANDROID
-    const QString write_permission = "android.permission.WRITE_EXTERNAL_STORAGE";
-    const QStringList permissions = { write_permission };
-    const QtAndroid::PermissionResultMap resultHash =
-            QtAndroid::requestPermissionsSync(QStringList(permissions));
-
-    if (resultHash[write_permission] == QtAndroid::PermissionResult::Denied) {
-        // TODO: show a dialog and graciously exit
-        dbgKrita << "Permission denied by the user";
-    }
-    else {
-        dbgKrita << "Permission granted";
-    }
-#endif
 
     const QString configPath = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation);
     QSettings kritarc(configPath + QStringLiteral("/kritadisplayrc"), QSettings::IniFormat);
@@ -280,11 +191,6 @@ extern "C" MAIN_EXPORT int MAIN_FN(int argc, char **argv)
         if (!qgetenv("KRITA_HIDPI").isEmpty()) {
             QCoreApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
         }
-#ifdef HAVE_HIGH_DPI_SCALE_FACTOR_ROUNDING_POLICY
-        if (kritarc.value("EnableHiDPIFractionalScaling", false).toBool()) {
-            QGuiApplication::setHighDpiScaleFactorRoundingPolicy(Qt::HighDpiScaleFactorRoundingPolicy::PassThrough);
-        }
-#endif
 
         if (!qEnvironmentVariableIsEmpty("KRITA_OPENGL_DEBUG")) {
             enableOpenGLDebug = true;
@@ -300,11 +206,7 @@ extern "C" MAIN_EXPORT int MAIN_FN(int argc, char **argv)
 
         logUsage = kritarc.value("LogUsage", true).toBool();
 
-#ifdef Q_OS_WIN
-        const QString preferredRendererString = kritarc.value("OpenGLRenderer", "angle").toString();
-#else
         const QString preferredRendererString = kritarc.value("OpenGLRenderer", "auto").toString();
-#endif
         preferredRenderer = KisOpenGL::convertConfigToOpenGLRenderer(preferredRendererString);
 
         const KisOpenGL::RendererConfig config =
@@ -313,10 +215,6 @@ extern "C" MAIN_EXPORT int MAIN_FN(int argc, char **argv)
         KisOpenGL::setDefaultSurfaceConfig(config);
         KisOpenGL::setDebugSynchronous(openGLDebugSynchronous);
 
-#ifdef Q_OS_WIN
-        // HACK: https://bugs.kde.org/show_bug.cgi?id=390651
-        resetRotation();
-#endif
     }
 
     if (logUsage) {
@@ -337,7 +235,6 @@ extern "C" MAIN_EXPORT int MAIN_FN(int argc, char **argv)
     }
 
 
-#ifdef Q_OS_LINUX
     {
         QByteArray originalXdgDataDirs = qgetenv("XDG_DATA_DIRS");
         if (originalXdgDataDirs.isEmpty()) {
@@ -369,9 +266,6 @@ extern "C" MAIN_EXPORT int MAIN_FN(int argc, char **argv)
             qputenv("GST_PLUGIN_SCANNER", appimageMountDir + QFile::encodeName("/usr/lib/gstreamer-1.0/gst-plugin-scanner"));
         }
     }
-#else
-    qputenv("XDG_DATA_DIRS", QFile::encodeName(root + "share"));
-#endif
 
     dbgKrita << "Setting XDG_DATA_DIRS" << qgetenv("XDG_DATA_DIRS");
 
@@ -386,12 +280,7 @@ extern "C" MAIN_EXPORT int MAIN_FN(int argc, char **argv)
         // And override Qt's locale, too
         QLocale locale(language.split(":").first());
         QLocale::setDefault(locale);
-#ifdef Q_OS_MAC
-        // prevents python >=3.7 nl_langinfo(CODESET) fail bug 417312.
-        qputenv("LANG", (locale.name() + ".UTF-8").toLocal8Bit());
-#else
         qputenv("LANG", locale.name().toLocal8Bit());
-#endif
 
         const QStringList rtlLanguages = QStringList()
                 << "ar" << "dv" << "he" << "ha" << "ku" << "fa" << "ps" << "ur" << "yi";
@@ -406,22 +295,6 @@ extern "C" MAIN_EXPORT int MAIN_FN(int argc, char **argv)
         // And if there isn't one, check the one set by the system.
         QLocale locale = QLocale::system();
 
-#ifdef Q_OS_ANDROID
-        // QLocale::uiLanguages() fails on Android, so if the fallback locale is being
-        // used we, try to fetch the device's default locale.
-        if (locale.name() == QLocale::c().name()) {
-            QAndroidJniObject localeJniObj = QAndroidJniObject::callStaticObjectMethod(
-                "java/util/Locale", "getDefault", "()Ljava/util/Locale;");
-
-            if (localeJniObj.isValid()) {
-                QAndroidJniObject tag = localeJniObj.callObjectMethod("toLanguageTag",
-                                                                      "()Ljava/lang/String;");
-                if (tag.isValid()) {
-                    locale = QLocale(tag.toString());
-                }
-            }
-        }
-#endif
         if (locale.name() != QStringLiteral("en")) {
             QStringList uiLanguages = locale.uiLanguages();
             for (QString &uiLanguage : uiLanguages) {
@@ -456,31 +329,12 @@ extern "C" MAIN_EXPORT int MAIN_FN(int argc, char **argv)
                     }
                 }
                 dbgLocale << "Converted ui languages:" << uiLanguages;
-#ifdef Q_OS_MAC
-                // See https://bugs.kde.org/show_bug.cgi?id=396370
-                KLocalizedString::setLanguages(QStringList() << uiLanguages.first());
-                qputenv("LANG", (envLanguage + ".UTF-8").toLocal8Bit());
-#else
                 KLocalizedString::setLanguages(QStringList() << uiLanguages);
                 qputenv("LANG", envLanguage.toLocal8Bit());
-#endif
             }
         }
     }
 
-#if defined Q_OS_WIN && defined USE_QT_TABLET_WINDOWS && defined QT_HAS_WINTAB_SWITCH
-    const bool forceWinTab = !KisConfig::useWin8PointerInputNoApp(&kritarc);
-    QCoreApplication::setAttribute(Qt::AA_MSWindowsUseWinTabAPI, forceWinTab);
-
-    if (qEnvironmentVariableIsEmpty("QT_WINTAB_DESKTOP_RECT") &&
-        qEnvironmentVariableIsEmpty("QT_IGNORE_WINTAB_MAPPING")) {
-
-        QRect customTabletRect;
-        KisDlgCustomTabletResolution::Mode tabletMode =
-            KisDlgCustomTabletResolution::getTabletMode(&customTabletRect);
-        KisDlgCustomTabletResolution::applyConfiguration(tabletMode, customTabletRect);
-    }
-#endif
 
     // first create the application so we can create a pixmap
     KisApplication app(key, argc, argv);
@@ -510,11 +364,6 @@ extern "C" MAIN_EXPORT int MAIN_FN(int argc, char **argv)
             app.setLayoutDirection(Qt::LeftToRight);
         }
     }
-#ifdef Q_OS_ANDROID
-    // TODO: remove "share" - sh_zam
-    // points to /data/data/org.krita/files/share/locale
-    KLocalizedString::addDomainLocaleDir("krita", QStandardPaths::writableLocation(QStandardPaths::HomeLocation) + "/share/locale");
-#endif
 
     KLocalizedString::setApplicationDomain("krita");
 
@@ -522,17 +371,6 @@ extern "C" MAIN_EXPORT int MAIN_FN(int argc, char **argv)
     dbgLocale << "Available domain translations" << KLocalizedString::availableDomainTranslations("krita");
 
 
-#ifdef Q_OS_WIN
-    QDir appdir(KoResourcePaths::getApplicationRoot());
-    QString path = qgetenv("PATH");
-    qputenv("PATH", QFile::encodeName(appdir.absolutePath() + "/bin" + ";"
-                                      + appdir.absolutePath() + "/lib" + ";"
-                                      + appdir.absolutePath() + "/Frameworks" + ";"
-                                      + appdir.absolutePath() + ";"
-                                      + path));
-
-    dbgKrita << "PATH" << qgetenv("PATH");
-#endif
 
     if (qApp->applicationDirPath().contains(KRITA_BUILD_DIR)) {
         qFatal("FATAL: You're trying to run krita from the build location. You can only run Krita from the installation location.");
@@ -574,80 +412,6 @@ extern "C" MAIN_EXPORT int MAIN_FN(int argc, char **argv)
         app.setSplashScreen(splash);
     }
 
-#if defined Q_OS_WIN
-    KisConfig cfg(false);
-    bool supportedWindowsVersion = true;
-    QOperatingSystemVersion osVersion = QOperatingSystemVersion::current();
-    if (osVersion.type() == QOperatingSystemVersion::Windows) {
-        if (osVersion.majorVersion() >= QOperatingSystemVersion::Windows7.majorVersion()) {
-            supportedWindowsVersion  = true;
-        }
-        else {
-            supportedWindowsVersion  = false;
-            if (cfg.readEntry("WarnedAboutUnsupportedWindows", false)) {
-                QMessageBox::information(nullptr,
-                                         i18nc("@title:window", "Krita: Warning"),
-                                         i18n("You are running an unsupported version of Windows: %1.\n"
-                                              "This is not recommended. Do not report any bugs.\n"
-                                              "Please update to a supported version of Windows: Windows 7, 8, 8.1 or 10.", osVersion.name()));
-                cfg.writeEntry("WarnedAboutUnsupportedWindows", true);
-
-            }
-        }
-    }
-#ifndef USE_QT_TABLET_WINDOWS
-    {
-        if (cfg.useWin8PointerInput() && !KisTabletSupportWin8::isAvailable()) {
-            cfg.setUseWin8PointerInput(false);
-        }
-        if (!cfg.useWin8PointerInput()) {
-            bool hasWinTab = KisTabletSupportWin::init();
-            if (!hasWinTab && supportedWindowsVersion) {
-                if (KisTabletSupportWin8::isPenDeviceAvailable()) {
-                    // Use WinInk automatically
-                    cfg.setUseWin8PointerInput(true);
-                } else if (!cfg.readEntry("WarnedAboutMissingWinTab", false)) {
-                    if (KisTabletSupportWin8::isAvailable()) {
-                        QMessageBox::information(nullptr,
-                                                 i18n("Krita Tablet Support"),
-                                                 i18n("Cannot load WinTab driver and no Windows Ink pen devices are found. If you have a drawing tablet, please make sure the tablet driver is properly installed."),
-                                                 QMessageBox::Ok, QMessageBox::Ok);
-                    } else {
-                        QMessageBox::information(nullptr,
-                                                 i18n("Krita Tablet Support"),
-                                                 i18n("Cannot load WinTab driver. If you have a drawing tablet, please make sure the tablet driver is properly installed."),
-                                                 QMessageBox::Ok, QMessageBox::Ok);
-                    }
-                    cfg.writeEntry("WarnedAboutMissingWinTab", true);
-                }
-            }
-        }
-        if (cfg.useWin8PointerInput()) {
-            KisTabletSupportWin8 *penFilter = new KisTabletSupportWin8();
-            if (penFilter->init()) {
-                // penFilter.registerPointerDeviceNotifications();
-                app.installNativeEventFilter(penFilter);
-                dbgKrita << "Using Win8 Pointer Input for tablet support";
-            } else {
-                dbgKrita << "No Win8 Pointer Input available";
-                delete penFilter;
-            }
-        }
-    }
-#elif defined QT_HAS_WINTAB_SWITCH
-
-    // Check if WinTab/WinInk has actually activated
-    const bool useWinInkAPI = !app.testAttribute(Qt::AA_MSWindowsUseWinTabAPI);
-
-    if (useWinInkAPI != cfg.useWin8PointerInput()) {
-        KisUsageLogger::log("WARNING: WinTab tablet protocol is not supported on this device. Switching to WinInk...");
-
-        cfg.setUseWin8PointerInput(useWinInkAPI);
-        cfg.setUseRightMiddleTabletButtonWorkaround(true);
-    }
-
-#endif
-#endif
     app.setAttribute(Qt::AA_CompressHighFrequencyEvents, false);
 
     // Set up remote arguments.
@@ -802,12 +566,6 @@ void installEcmTranslations(KisApplication &app)
         const QString &localeDirName = langIter.previous();
         Q_FOREACH(const auto &catalog, ecmCatalogs) {
             QString subPath = QStringLiteral("locale/") % localeDirName % QStringLiteral("/LC_MESSAGES/") % catalog % QStringLiteral(".qm");
-#if defined(Q_OS_ANDROID)
-            const QString fullPath = QStringLiteral("assets:/share/") + subPath;
-            if (!QFile::exists(fullPath)) {
-                continue;
-            }
-#else
             // Our patched k18n uses AppDataLocation (for AppImage).
             QString fullPath = QStandardPaths::locate(QStandardPaths::AppDataLocation, subPath);
             if (fullPath.isEmpty()) {
@@ -818,7 +576,6 @@ void installEcmTranslations(KisApplication &app)
                     continue;
                 }
             }
-#endif
             QTranslator *translator = new QTranslator(&app);
             if (translator->load(fullPath)) {
                 dbgLocale << "Loaded ECM translations for" << localeDirName << catalog;
